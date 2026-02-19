@@ -1,1 +1,184 @@
 # Foto-finish-
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FinishLine Master Pro</title>
+    <style>
+        :root { --primary: #ed1c24; --bg: #0a0a0a; }
+        body { font-family: 'Segoe UI', system-ui, sans-serif; text-align: center; background: var(--bg); color: white; margin: 0; }
+        .container { padding: 15px; max-width: 500px; margin: auto; }
+        
+        #timerDisplay { font-family: 'Courier New', monospace; font-size: 3.2em; color: #00ff00; margin: 10px 0; font-weight: bold; }
+        #status { font-size: 0.9em; color: #ffcc00; height: 20px; text-transform: uppercase; letter-spacing: 1px; }
+
+        .preview-box { position: relative; width: 100%; border-radius: 12px; overflow: hidden; border: 2px solid #333; margin: 15px 0; }
+        video { width: 100%; display: block; filter: saturate(1.2); }
+        .finish-line { position: absolute; left: 50%; top: 0; bottom: 0; width: 2px; background: var(--primary); box-shadow: 0 0 10px var(--primary); z-index: 10; }
+
+        .sensor-bar { width: 100%; height: 8px; background: #222; border-radius: 4px; margin-bottom: 20px; }
+        #sensorFill { width: 0%; height: 100%; background: lime; transition: width 0.1s; }
+
+        .controls { background: #161616; padding: 20px; border-radius: 15px; border: 1px solid #222; }
+        .control-group { margin-bottom: 15px; text-align: left; }
+        label { font-size: 0.8em; color: #888; display: block; margin-bottom: 5px; }
+        input[type="range"] { width: 100%; accent-color: var(--primary); }
+        
+        .btn-main { width: 100%; padding: 18px; font-size: 18px; border-radius: 10px; border: none; cursor: pointer; font-weight: bold; margin-bottom: 10px; transition: 0.2s; }
+        #btnReady { background: var(--primary); color: white; }
+        #btnDownload { background: #ffffff; color: black; display: none; }
+        #btnReset { background: #333; color: white; font-size: 14px; padding: 10px; width: auto; }
+
+        canvas { display: none; } /* Oculto hasta que se genera la imagen */
+        #resultPreview { max-width: 100%; border: 1px solid #444; margin-top: 20px; border-radius: 8px; display: none; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div id="timerDisplay">0.000s</div>
+        <div id="status">Alinea la meta</div>
+
+        <div class="preview-box">
+            <video id="video" autoplay playsinline></video>
+            <div class="finish-line"></div>
+        </div>
+
+        <div class="sensor-bar"><div id="sensorFill"></div></div>
+
+        <div class="controls">
+            <div class="control-group">
+                <label>Sensibilidad (Detección): <span id="sensVal">40</span></label>
+                <input type="range" id="sensSlider" min="10" max="120" value="40">
+            </div>
+            
+            <button id="btnReady" class="btn-main">ARMAR CRONÓMETRO</button>
+            <button id="btnDownload" class="btn-main">DESCARGAR FOTO FINISH</button>
+            <button id="btnReset">REINICIAR TODO</button>
+        </div>
+
+        <canvas id="canvasFinish"></canvas>
+        <img id="resultPreview" alt="Resultado Final">
+    </div>
+
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvasFinish');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        const sensorFill = document.getElementById('sensorFill');
+        const timerDisplay = document.getElementById('timerDisplay');
+        const statusText = document.getElementById('status');
+        const resultPreview = document.getElementById('resultPreview');
+
+        let state = "IDLE"; 
+        let baseline = null;
+        let currentX = 0;
+        let startTime = 0;
+        let threshold = 40;
+        let finalTime = "0.000";
+
+        async function init() {
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                video: { facingMode: "environment", frameRate: { ideal: 60 } } 
+            });
+            video.srcObject = stream;
+            video.onloadedmetadata = () => {
+                canvas.height = video.videoHeight + 80; // Espacio extra para el texto
+                canvas.width = 2500; 
+            };
+        }
+
+        function getLineData() {
+            const temp = document.createElement('canvas');
+            const tCtx = temp.getContext('2d');
+            temp.width = video.videoWidth;
+            temp.height = video.videoHeight;
+            tCtx.drawImage(video, 0, 0);
+            return tCtx.getImageData(video.videoWidth / 2, 0, 1, video.videoHeight).data;
+        }
+
+        function loop() {
+            if (state === "IDLE" || state === "FINISHED") return;
+
+            const currentData = getLineData();
+            let diff = 0;
+            if (baseline) {
+                for (let i = 0; i < currentData.length; i += 4) {
+                    diff += Math.abs(currentData[i] - baseline[i]);
+                }
+                diff /= (currentData.length / 4);
+            }
+
+            sensorFill.style.width = Math.min((diff / threshold) * 100, 100) + "%";
+            sensorFill.style.background = diff > threshold ? "red" : "lime";
+
+            if (state === "ARMED" && diff > threshold) {
+                state = "RUNNING";
+                startTime = performance.now();
+                statusText.innerText = "¡EN MARCHA!";
+                ctx.fillStyle = "black";
+                ctx.fillRect(0,0, canvas.width, canvas.height);
+            } else if (state === "RUNNING") {
+                // Dibujar foto finish (desplazada 80px hacia abajo para el encabezado)
+                ctx.drawImage(video, video.videoWidth/2, 0, 1, video.videoHeight, currentX, 80, 2, video.videoHeight);
+                currentX += 2;
+
+                const now = (performance.now() - startTime) / 1000;
+                finalTime = now.toFixed(3);
+                timerDisplay.innerText = finalTime + "s";
+
+                if (diff > threshold && (performance.now() - startTime) > 1500) {
+                    finishRace();
+                }
+            }
+            requestAnimationFrame(loop);
+        }
+
+        function finishRace() {
+            state = "FINISHED";
+            statusText.innerText = "CAPTURA FINALIZADA";
+            
+            // Añadir encabezado a la imagen
+            ctx.fillStyle = "#111";
+            ctx.fillRect(0, 0, currentX, 80);
+            ctx.fillStyle = "#ed1c24";
+            ctx.font = "bold 30px Arial";
+            ctx.fillText("TIEMPO OFICIAL: " + finalTime + "s", 20, 50);
+            
+            // Mostrar vista previa
+            const croppedCanvas = document.createElement('canvas');
+            croppedCanvas.width = currentX;
+            croppedCanvas.height = canvas.height;
+            croppedCanvas.getContext('2d').drawImage(canvas, 0, 0, currentX, canvas.height, 0, 0, currentX, canvas.height);
+            
+            resultPreview.src = croppedCanvas.toDataURL('image/png');
+            resultPreview.style.display = "block";
+            document.getElementById('btnDownload').style.display = "block";
+            document.getElementById('btnReady').style.display = "none";
+        }
+
+        document.getElementById('btnReady').onclick = () => {
+            baseline = getLineData();
+            state = "ARMED";
+            currentX = 0;
+            statusText.innerText = "LISTO: ESPERANDO CRUCE";
+            loop();
+        };
+
+        document.getElementById('btnDownload').onclick = () => {
+            const link = document.createElement('a');
+            link.download = `FotoFinish_${finalTime}s.png`;
+            link.href = resultPreview.src;
+            link.click();
+        };
+
+        document.getElementById('btnReset').onclick = () => location.reload();
+        document.getElementById('sensSlider').oninput = (e) => {
+            threshold = e.target.value;
+            document.getElementById('sensVal').innerText = threshold;
+        };
+
+        init();
+    </script>
+</body>
+</html>
